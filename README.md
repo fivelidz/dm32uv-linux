@@ -1,5 +1,16 @@
 # dm32uv-linux
 
+## ✅ IT WORKS — Load CB channels in one command
+
+```bash
+cd src
+python3.11 dm32uv_cli.py load-cb    # writes 80 AU UHF CB channels, verified
+```
+
+Verified on firmware `DM32.NRF.01.049`: 80 channels written and read back
+byte-for-byte. No CPS, no Wine, no manual entry.
+
+
 **Program the Baofeng DM-32UV DMR radio from Linux — including firmware
 version DM32.NRF.01.049, which no existing open-source tool supports.**
 
@@ -121,7 +132,8 @@ programming session — it only accepts the handshake once per power-on.
 - [x] qdmr patched (firmware allowlist + line states + flow control)
 - [x] Python driver written (pyserial-based)
 - [x] 80-channel CB codeplug generated
-- [ ] Full read/write verified end-to-end (in progress)
+- [x] Full codeplug READ verified (438KB, 107 blocks)
+- [x] Codeplug WRITE verified (80 CB channels written + read back byte-exact)
 - [ ] Patch upstreamed to qdmr
 
 ## Credits

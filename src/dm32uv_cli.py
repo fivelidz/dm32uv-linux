@@ -78,6 +78,7 @@ def main():
     sub = ap.add_subparsers(dest="cmd")
     sub.add_parser("detect", help="Detect + identify the radio")
     sub.add_parser("info", help="Show radio info")
+    sub.add_parser("load-cb", help="Write 80 AU UHF CB channels")
     b = sub.add_parser("backup", help="Read full codeplug to a file")
     b.add_argument("output", help="Output .bin file")
     args = ap.parse_args()
@@ -86,6 +87,8 @@ def main():
         return cmd_detect(args)
     elif args.cmd == "info":
         return cmd_info(args)
+    elif args.cmd == "load-cb":
+        return cmd_load_cb(args)
     elif args.cmd == "backup":
         return cmd_backup(args)
     else:
@@ -95,3 +98,28 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
+
+
+def cmd_load_cb(args):
+    """Write all 80 Australian UHF CB channels to the radio."""
+    sys.path.insert(0, ".")
+    from codeplug import make_cb_channels, build_channel_edits, build_zone_edits
+    radio = DM32UVRadio(args.port)
+    if not radio.connect():
+        print("No radio detected. Power-cycle and retry.")
+        return 1
+    print(f"Connected: {radio.info.model} fw={radio.info.firmware}")
+    chans = make_cb_channels()
+    edits = {**build_channel_edits(chans), **build_zone_edits("UHF-CB", len(chans))}
+    print(f"Writing {len(chans)} CB channels + UHF-CB zone...")
+    result = radio.apply_edits(edits, verify=True)
+    radio.disconnect()
+    if result["verified"]:
+        print(f">>> SUCCESS! {len(chans)} CB channels written + verified! <<<")
+        print("Power-cycle the radio to see them in the UHF-CB zone.")
+        return 0
+    else:
+        print("Write had errors:")
+        for e in result["errors"][:8]:
+            print(f"  {e}")
+        return 1
