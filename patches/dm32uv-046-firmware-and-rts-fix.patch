@@ -1,0 +1,51 @@
+diff --git a/lib/dm32uv.hh b/lib/dm32uv.hh
+index ef6664b..8a11c33 100644
+--- a/lib/dm32uv.hh
++++ b/lib/dm32uv.hh
+@@ -97,7 +97,7 @@ public:
+ 
+ public:
+   /** Returns a set of supported firmware versions. */
+-  static inline QSet<QByteArray> supportedFirmwareVersions() { return {"DM32.01.L01.048"}; }
++  static inline QSet<QByteArray> supportedFirmwareVersions() { return {"DM32.01.L01.048", "DM32.01.01.046"}; }
+ 
+ public:
+   /** Some constants. */
+diff --git a/lib/dm32uv_interface.cc b/lib/dm32uv_interface.cc
+index f3c53f4..961a5e6 100644
+--- a/lib/dm32uv_interface.cc
++++ b/lib/dm32uv_interface.cc
+@@ -277,8 +277,11 @@ DM32UVInterface::DM32UVInterface(const USBDeviceDescriptor &descr,
+   if (isOpen()) {
+     _state = State::Open;
+     setFlowControl(QSerialPort::NoFlowControl);
+-    setRequestToSend(false);
+-    setDataTerminalReady(true);
++    // DM32.01.01.046 firmware needs RTS HIGH, DTR LOW for the PSEARCH
++    // handshake (verified empirically). The original .L01.048 values
++    // (RTS low, DTR high) wedge the .046 firmware handshake.
++    setRequestToSend(true);
++    setDataTerminalReady(false);
+   } else if (QSerialPort::NoError != QSerialPort::error()) {
+     _state = State::Error;
+   }
+diff --git a/lib/usbserial.cc b/lib/usbserial.cc
+index 60518b9..8919c5b 100644
+--- a/lib/usbserial.cc
++++ b/lib/usbserial.cc
+@@ -36,8 +36,13 @@ USBSerial::USBSerial(const USBDeviceDescriptor &descriptor, BaudRate rate, const
+   if (! setBaudRate(rate)) {
+     logWarn() << "Cannot set speed to " << rate << " baud.";
+   }
+-  if (! setFlowControl(QSerialPort::HardwareControl)) {
+-    logWarn() << "Cannot enable hardware flow control.";
++  // NOTE: Do NOT force HardwareControl here — it makes Qt auto-manage the
++  // RTS/CTS lines, which overrides the per-radio line-state setup. The
++  // DM-32UV (.046 firmware) needs RTS held HIGH manually, which Qt's
++  // hardware flow control would clobber. Radios that need flow control set
++  // it in their own open() override.
++  if (! setFlowControl(QSerialPort::NoFlowControl)) {
++    logWarn() << "Cannot set no flow control.";
+   }
+ 
+   if (! this->open(QIODevice::ReadWrite)) {
