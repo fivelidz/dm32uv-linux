@@ -367,21 +367,44 @@ class DM32UVRadio:
             raise IOError(f"Short read: expected {resp_len}, got {len(data)}")
         return data
 
+    def write_memory(self, address: int, data: bytes):
+        """Write `data` to a PHYSICAL `address`.
+
+        Command format (from qdmr WriteRequest):
+          'W' + address(3 bytes LE) + length(2 bytes LE) + payload
+        Response: ACK (0x06). Chunks to <=4096 bytes, aligned to 0x1000.
+
+        IMPORTANT: `address` is the PHYSICAL address (from the address map),
+        the same address space read_memory() uses. Do NOT pass a raw virtual
+        codeplug address here — translate it via _reverse_map first.
+        """
+        offset = 0
+        remaining = len(data)
+        while remaining > 0:
+            if (address & 0xFFF) != 0:
+                n = min(remaining, 0x1000 - (address & 0xFFF))
+            else:
+                n = min(remaining, 0x1000)
+            chunk = data[offset : offset + n]
+            cmd = bytearray()
+            cmd.append(0x57)  # 'W'
+            cmd += struct.pack("<I", address)[:3]  # 3-byte address LE
+            cmd += struct.pack("<H", n)  # 2-byte length LE
+            cmd += chunk
+            self._write(bytes(cmd))
+            resp = self._read(1)
+            if resp != b"\x06":
+                raise IOError(
+                    f"Write NAK at 0x{address:X}: {resp.hex() if resp else 'timeout'}"
+                )
+            address += n
+            offset += n
+            remaining -= n
+            time.sleep(0.02)
+
     def write_block(self, address: int, data: bytes, metadata: int = 0):
-        """Write a 4KB block to `address` with metadata byte."""
-        assert len(data) == BLOCK_SIZE, f"Block must be {BLOCK_SIZE} bytes"
-        cmd = bytearray(6 + BLOCK_SIZE + 1)
-        cmd[0] = 0x57  # 'W'
-        cmd[1:4] = struct.pack("<I", address)[:3]
-        cmd[4] = 0x00
-        cmd[5] = 0x10  # size indicator
-        cmd[6 : 6 + BLOCK_SIZE] = data
-        cmd[6 + BLOCK_SIZE] = metadata
-        self._write(bytes(cmd))
-        resp = self._read(1)
-        if resp != b"\x06":
-            raise IOError(f"Write NAK: {resp.hex() if resp else 'timeout'}")
-        time.sleep(0.05)
+        """Compatibility shim — writes via write_memory (metadata ignored)."""
+        self.write_memory(address, data)
 
     # ── Address Map ────────────────────────────────────────────────
 
@@ -492,3 +515,81 @@ class DM32UVRadio:
                 progress_cb(virt, len(codeplug), len(self._address_map))
 
         return codeplug
+
+    # ── Write path (VIRTUAL-address aware) ─────────────────────────
+
+    def apply_edits(self, edits: dict, verify: bool = True, progress_cb=None) -> dict:
+        """Apply {virtual_address: bytes} edits, translating to PHYSICAL.
+
+        THE CRITICAL FIX: codeplug edits are specified by VIRTUAL address
+        (0x12000 = channels, 0x5C000 = zones). But the radio stores those
+        pages at different PHYSICAL addresses (found via the metadata probe).
+        Writes MUST go to the physical address, or they clobber whatever
+        real data lives at the physical location = corruption.
+
+        For each affected 4KB virtual block:
+          1. Translate virtual block -> physical (via _reverse_map)
+          2. Read the current physical block
+          3. Overlay edits at their in-block offsets
+          4. Write back to the PHYSICAL address
+          5. Verify by reading the physical address back
+        """
+        if not self._address_map:
+            self.build_address_map()
+
+        # Group edits by 4KB virtual block
+        blocks: dict = {}
+        for vaddr, data in edits.items():
+            vblock = vaddr & ~0xFFF
+            blocks.setdefault(vblock, []).append((vaddr, data))
+
+        errors = []
+        written = 0
+        n = len(blocks)
+
+        for i, (vblock, block_edits) in enumerate(sorted(blocks.items())):
+            # Translate virtual block -> physical
+            phys = self._reverse_map.get(vblock)
+            if phys is None:
+                errors.append(
+                    f"Virtual block 0x{vblock:X} not mapped — cannot write "
+                    f"safely (would corrupt). Skipped."
+                )
+                continue
+
+            # Read current physical block, overlay edits, write back
+            try:
+                current = bytearray(self.read_memory(phys, BLOCK_SIZE))
+            except IOError as e:
+                errors.append(f"Read-before-write failed 0x{phys:X}: {e}")
+                continue
+
+            for vaddr, data in block_edits:
+                off = vaddr & 0xFFF
+                current[off : off + len(data)] = data
+
+            try:
+                self.write_memory(phys, bytes(current))
+                written += 1
+            except IOError as e:
+                errors.append(f"Write failed phys 0x{phys:X}: {e}")
+                continue
+
+            if verify:
+                try:
+                    rb = self.read_memory(phys, BLOCK_SIZE)
+                    for vaddr, data in block_edits:
+                        off = vaddr & 0xFFF
+                        if rb[off : off + len(data)] != data:
+                            errors.append(f"Verify mismatch virt 0x{vaddr:X}")
+                except IOError as e:
+                    errors.append(f"Verify read failed 0x{phys:X}: {e}")
+
+            if progress_cb:
+                progress_cb(vblock, i + 1, n)
+
+        return {
+            "blocks_written": written,
+            "verified": verify and len(errors) == 0,
+            "errors": errors,
+        }
