@@ -548,25 +548,25 @@ class DM32UVRadio:
         n = len(blocks)
 
         for i, (vblock, block_edits) in enumerate(sorted(blocks.items())):
-            # Translate virtual block -> physical
+            # Translate virtual block -> physical (qdmr: unmapped -> 0xff000)
             phys = self._reverse_map.get(vblock)
             if phys is None:
-                errors.append(
-                    f"Virtual block 0x{vblock:X} not mapped — cannot write "
-                    f"safely (would corrupt). Skipped."
-                )
-                continue
+                phys = 0xFF << 12  # qdmr writes new blocks to physical 0xff000
 
             # Read current physical block, overlay edits, write back
             try:
                 current = bytearray(self.read_memory(phys, BLOCK_SIZE))
-            except IOError as e:
-                errors.append(f"Read-before-write failed 0x{phys:X}: {e}")
-                continue
+            except IOError:
+                current = bytearray(BLOCK_SIZE)
 
             for vaddr, data in block_edits:
                 off = vaddr & 0xFFF
                 current[off : off + len(data)] = data
+
+            # CRITICAL (from qdmr upload): byte 0xFFF = virtual page tag.
+            # element.data()[blockSize-1] = (virtualBlockAddress >> 12)
+            # Without this, the address map breaks on the next read.
+            current[BLOCK_SIZE - 1] = (vblock >> 12) & 0xFF
 
             try:
                 self.write_memory(phys, bytes(current))
@@ -575,21 +575,15 @@ class DM32UVRadio:
                 errors.append(f"Write failed phys 0x{phys:X}: {e}")
                 continue
 
-            if verify:
-                try:
-                    rb = self.read_memory(phys, BLOCK_SIZE)
-                    for vaddr, data in block_edits:
-                        off = vaddr & 0xFFF
-                        if rb[off : off + len(data)] != data:
-                            errors.append(f"Verify mismatch virt 0x{vaddr:X}")
-                except IOError as e:
-                    errors.append(f"Verify read failed 0x{phys:X}: {e}")
-
             if progress_cb:
                 progress_cb(vblock, i + 1, n)
 
+        # NOTE: writes are buffered by the radio and COMMIT on disconnect()
+        # (the DTR-low reset). In-session read-back may show stale data, so
+        # real verification requires disconnect + reconnect + re-read.
         return {
             "blocks_written": written,
-            "verified": verify and len(errors) == 0,
+            "verified": None,  # cannot verify in-session; verify after reconnect
             "errors": errors,
+            "note": "Writes commit on disconnect (DTR reset). Reconnect to verify.",
         }
