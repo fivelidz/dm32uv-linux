@@ -6,7 +6,7 @@ official CPS software. Based on:
   - The qdmr C++ implementation (github.com/hmatuschek/qdmr)
 
 Protocol summary:
-  1. Connect at 115200 baud, DTR=high, RTS=low
+  1. Connect at 115200 baud, RTS=high, DTR=low
   2. Handshake: PSEARCH → PASSSTA → SYSINFO → V-frames → PROGRAM
   3. Build address map (physical ↔ virtual 4KB block mapping)
   4. Read/write 4KB blocks via R/W commands

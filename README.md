@@ -76,15 +76,17 @@ dm32uv-linux/
 │   └── dm32uv-046-firmware-and-rts-fix.patch  ← qdmr patch (upstream this!)
 ├── codeplugs/
 │   └── dm32uv_cb.conf           ← 80 Australian UHF CB channels (dmrconf format)
-└── docs/
-    └── PROTOCOL.md              ← The handshake + line states documented
+└── (handshake + line states documented in this README — see "The RTS/DTR handshake")
 ```
 
 ## The qdmr patch (the upstreamable fix)
 
 `patches/dm32uv-046-firmware-and-rts-fix.patch` makes three changes to qdmr:
 
-1. `lib/dm32uv.hh` — add `"DM32.NRF.01.049"` to `supportedFirmwareVersions()`
+1. `lib/dm32uv.hh` — adds firmware `n.01.01.046` to `supportedFirmwareVersions()`
+   (the standalone Python tool in `src/` was separately verified against
+   `DM32.NRF.01.049`; if your radio reports a different string, apply the same
+   one-line change for it)
 2. `lib/dm32uv_interface.cc` — set RTS=true, DTR=false (was reversed)
 3. `lib/usbserial.cc` — use NoFlowControl (was HardwareControl, which
    clobbered the manual RTS setting)
